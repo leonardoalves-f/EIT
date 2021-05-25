@@ -4,6 +4,7 @@ import numpy.linalg
 import scipy.sparse as sparse
 import scipy.sparse.linalg as linalg
 from scipy.io import loadmat
+from tqdm import tqdm
 
 class Mesh:
     def __init__(self,path,rho_dict=None):
@@ -275,32 +276,36 @@ class InverseProblem:
             self.J[:,i*div:i*div+div]=-np.matmul(K_inv,T).transpose((0,2,1))\
                                       .reshape(len(elm_brain),-1).transpose()
 
-    def load_priori(self,path):
+    def load_prior(self,path):
         rho_priori=[]
         W_priori=[]
 
         for priori in path:
-            parameters=loadmat(priori)
+            parameters=loadmat(priori+'.mat')
             rho_priori.append(parameters['rho'])
             W_priori.append(parameters['W'])
 
         self.rho_priori=np.array(rho_priori)
         self.W_priori=np.array(W_priori)
 
+    def load_approximation_error(self,path):
+        self.approx_error=loadmat(path+'.mat')['mean_error']
+
+    def load_measure(self,path):
+        self.measure=loadmat(path+'.mat')['U']
+
     def solve(self,iter,step,l):
         self.solve_voltage=[]
         self.solve_rho=[]
 
         self.solve_rho.append(self.direct.rho_dict['brain'].reshape(-1,1))
-        measure=loadmat('PD_single_avcHem_refinado.mat')['U_final'][:,:,1]
-        measure=measure.transpose().reshape((-1,1))
-        approx_error=loadmat('approximation_error.mat')['mean_error']
+        measure=self.measure.transpose().reshape((-1,1))
 
         mult = lambda X,Y: np.matmul(X,Y)
 
         l=np.array(l).reshape((self.W_priori.shape[0],1,1))
 
-        for i in range(iter):
+        for i in tqdm(range(iter)):
             rho=self.solve_rho[i]
 
             self.direct.calc_global_stiffness()
@@ -314,7 +319,7 @@ class InverseProblem:
             A_priori=np.sum(l*mult(self.W_priori,rho-self.rho_priori),0)
             B_priori=np.sum(l*self.W_priori,0)
 
-            error=measure-voltage+approx_error
+            error=measure-voltage+self.approx_error
 
             A=mult(self.J.transpose(),error) - A_priori
             B=numpy.linalg.solve(mult(self.J.transpose(),self.J)+B_priori,A)
