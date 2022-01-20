@@ -287,6 +287,19 @@ class InverseProblem:
 
         self.rho_priori=np.array(rho_priori)
         self.W_priori=np.array(W_priori)
+    
+    def irls_prior(self, rho, tol=1e-5):
+        W_irls = []
+
+        for i in range(self.W_priori.shape[0]):
+            L = np.linalg.cholesky(self.W_priori[i,:,:]).T
+            absLm = np.abs(L @ rho)
+            absLm[absLm < tol] = tol
+            R = (1 / absLm**2)
+            Rd = np.diag(np.sqrt(R[:,0]))
+            W_irls.append(L.T @ Rd @ L)
+        
+        self.W_irls = np.array(W_irls)
 
     def load_approximation_error(self,path):
         self.approx_error=loadmat(path+'.mat')['mean_error']
@@ -294,7 +307,7 @@ class InverseProblem:
     def load_measure(self,path):
         self.measure=loadmat(path+'.mat')['U']
 
-    def solve(self,iter,step,l):
+    def solve(self,iter,step,l,prior_norm='l2'):
         self.solve_voltage=[]
         self.solve_rho=[]
 
@@ -316,8 +329,14 @@ class InverseProblem:
 
             self.calc_jacobian()
 
-            A_priori=np.sum(l*mult(self.W_priori,rho-self.rho_priori),0)
-            B_priori=np.sum(l*self.W_priori,0)
+            if(prior_norm=='l1'):
+                self.irls_prior(rho)
+                W_prior = self.W_irls
+            elif(prior_norm=='l2'):
+                W_prior = self.W_priori
+
+            A_priori=np.sum(l*mult(W_prior,rho-self.rho_priori),0)
+            B_priori=np.sum(l*W_prior,0)
 
             error=measure-voltage+self.approx_error
 

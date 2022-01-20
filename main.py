@@ -5,7 +5,7 @@ from scipy.io import loadmat
 num_iterations=30
 att_step=0.08
 prior_lambda=[3.2e-14, 8e-8]
-output_name='solution'
+output_name='solution_isq_l2'
 
 # PATHS TO NECESSARY DATA
 rho_brain=loadmat('prior_atlas.mat')['rho'][:,0]
@@ -19,7 +19,7 @@ mesh_path='mesh_head_03_SEMSURFACE' # Mesh to solve inverse problem
 prior_path=['prior_atlas','prior_highPass'] # Prior information
                                             # Must contain keys 'W' and 'rho'
 
-measure_path='measure_Hem' # Simulated measurements
+measure_path='measure_Isq' # Simulated measurements
                            # Must contain key 'U'
 
 approxError_path='approximation_error' # Approximation error
