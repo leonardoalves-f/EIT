@@ -7,7 +7,7 @@ from scipy.io import loadmat
 from tqdm import tqdm
 
 class Mesh:
-    def __init__(self,path,rho_dict=None):
+    def __init__(self,path,rho_dict=None,have_rho=False):
         self.path=path+'.msh'
         mesh_info=meshio.read(path+'.msh')
 
@@ -21,6 +21,8 @@ class Mesh:
 
         if rho_dict is not None:
             self.define_rho(rho_dict)
+        elif(have_rho):
+            self.get_rho_dict(mesh_info)
 
         self.insert_virtual()
         self.calc_central_node()
@@ -49,6 +51,10 @@ class Mesh:
 
         self.triangle['centroid']=triangle_centroid
         self.tetra['centroid']=tetra_centroid
+
+    def get_rho_dict(self, mesh_info):
+        self.triangle['rho'] = mesh_info.cell_data['Resistivity'][0]
+        self.tetra['rho'] = mesh_info.cell_data['Resistivity'][1]
 
     def define_rho(self,rho_dict):
         rho_triangle=rho_dict['electrode']
@@ -85,6 +91,20 @@ class Mesh:
         data['Resistivity']=[np.array(self.triangle['rho'])\
                             *np.ones(self.triangle['n']),
                              np.array(self.tetra['rho'])]
+
+        mesh_out=meshio.Mesh(
+            mesh_info.points,
+            mesh_info.cells,
+            cell_data=data)
+
+        mesh_out.write(name_out+'.msh', file_format="gmsh22")
+    
+    def export_diff(self,name_out,mesh_ref):
+        mesh_info=meshio.read(self.path)
+        data=mesh_info.cell_data
+        data['Resistivity']=[np.array(self.triangle['rho'])\
+                            *np.ones(self.triangle['n']),
+                             np.array(self.tetra['rho']-mesh_ref.tetra['rho'])]
 
         mesh_out=meshio.Mesh(
             mesh_info.points,
@@ -276,27 +296,50 @@ class InverseProblem:
             self.J[:,i*div:i*div+div]=-np.matmul(K_inv,T).transpose((0,2,1))\
                                       .reshape(len(elm_brain),-1).transpose()
 
-    def load_prior(self,path):
+    def load_prior(self,path,format='W'):
         rho_priori=[]
-        W_priori=[]
+        
+        if(format=='W'):
+            W_priori=[]
 
-        for priori in path:
-            parameters=loadmat(priori+'.mat')
-            rho_priori.append(parameters['rho'])
-            W_priori.append(parameters['W'])
+            for priori in path:
+                parameters=loadmat(priori+'.mat')
+                rho_priori.append(parameters['rho'])
 
-        self.rho_priori=np.array(rho_priori)
-        self.W_priori=np.array(W_priori)
+                if('W' in parameters.keys()):
+                    W_priori.append(parameters['W'])
+                else:
+                    W = parameters['L'].T @ parameters['L']
+                    W_priori.append(W)
+
+            self.rho_priori=np.array(rho_priori)
+            self.W_priori=np.array(W_priori)
+
+        elif(format=='L'):
+            L_priori = []
+
+            for priori in path:
+                parameters=loadmat(priori+'.mat')
+                rho_priori.append(parameters['rho'])
+
+                if('L' in parameters.keys()):
+                    L_priori.append(parameters['L'])
+                else:
+                    L =  np.linalg.cholesky(parameters['W']).T
+                    L_priori.append(L)
+
+            self.rho_priori=np.array(rho_priori)
+            self.L_priori=L_priori
     
-    def irls_prior(self, rho, tol=1e-5):
+    def irls_prior(self, rho, tol=1e-5, p=1):
         W_irls = []
 
-        for i in range(self.W_priori.shape[0]):
-            L = np.linalg.cholesky(self.W_priori[i,:,:]).T
+        for i in range(len(self.L_priori)):
+            L = self.L_priori[i]
             absLm = np.abs(L @ rho)
             absLm[absLm < tol] = tol
-            R = (1 / absLm**2)
-            Rd = np.diag(np.sqrt(R[:,0]))
+            R = absLm**(p-2)
+            Rd = np.diag(R[:,0])
             W_irls.append(L.T @ Rd @ L)
         
         self.W_irls = np.array(W_irls)
@@ -307,6 +350,17 @@ class InverseProblem:
     def load_measure(self,path):
         self.measure=loadmat(path+'.mat')['U']
 
+    def add_noise(self, p=0.5, mean=0, std=0.1, seed=2022):
+        np.random.seed(seed)
+
+        noise = np.random.randn(self.measure.shape[0],
+                                self.measure.shape[1])
+        noise = std*noise + mean
+        noise = (p/100)*self.measure*noise
+
+        self.noise = noise
+        self.measure += noise
+
     def solve(self,iter,step,l,prior_norm='l2'):
         self.solve_voltage=[]
         self.solve_rho=[]
@@ -316,7 +370,7 @@ class InverseProblem:
 
         mult = lambda X,Y: np.matmul(X,Y)
 
-        l=np.array(l).reshape((self.W_priori.shape[0],1,1))
+        l=np.array(l).reshape((len(l),1,1))
 
         for i in tqdm(range(iter)):
             rho=self.solve_rho[i]
